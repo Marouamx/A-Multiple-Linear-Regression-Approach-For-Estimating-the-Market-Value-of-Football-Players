@@ -1,0 +1,326 @@
+---
+title: "TD Football"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+## A Multiple Linear Regression Approach For Estimating the Market Value of Football Players
+
+## Introduction:
+
+Football clubs spend a huge amount of money every year to buy professional football players, during the transfer window. Predicting how much players value in the transfer market is one of the difficult tasks for managers of the club. Using a dataset of 4250 players from different teams playing in multiple European competitions, in this lab work we will estimate the market value of the players with an attacker using regression analysis and then analysis the model's performance and results.
+
+## Data engineering:
+
+Exploring our data since we have five subsets and see how we can build one dataset taking just relevant columns from different subsets
+
+For example:
+
+-   From appearances we get goals and assists per player then per competition and from competition we get type to formulate one joint column called "avg_total_goals_percomp"
+
+-   Of course we will keep total goals and total assists as well
+
+-   From appearance get total minute played averaged by how many games he played.
+
+```{r}
+
+rm(list = ls())
+
+appearances = read.csv(file = 'data/appearances.csv')
+app0 = subset(appearances, select = -c(appearance_id, player_club_id))
+```
+
+```{r}
+library(tidyverse)
+app1= app0 %>% group_by(player_id,competition_id) %>% summarise(goals = sum(goals))
+```
+
+```{r}
+app2=app1 %>% group_by(player_id) %>%summarise(goals = sum(goals))
+```
+
+```{r}
+colnames(app2)[2] = "total_goals"
+```
+
+```{r}
+app3= app1 %>%
+distinct(player_id, competition_id) %>%
+group_by(player_id) %>%
+summarize("Nb_Comp" = n())
+```
+
+```{r}
+app4=merge(x=app2,y=app3,by="player_id")
+```
+
+```{r}
+colnames(app4)[2] = "avg_total_goals_percomp"
+app4=app4 %>% group_by(player_id) %>%summarise(avg_total_goals_percomp = avg_total_goals_percomp/Nb_Comp, Nb_Comp=Nb_Comp)
+```
+
+```{r}
+app5=app0 %>% group_by(player_id) %>%summarise("total_assists"=sum(assists), "total_minutes_played"=sum(minutes_played), "total_red_card"=sum(red_cards), "total_yellow_cards"=sum(yellow_cards))
+app5=merge(app2,app5,"player_id")
+
+```
+
+```{r}
+app6=merge(app5,app4,"player_id")
+```
+
+-   For the assists and goals, we get them by the total of minutes played
+
+    like this it is normalized and makes more sense
+
+-   For red and yellow cards, we get them by the total of competitions he participated in
+
+```{r}
+app7=app6 %>% group_by(player_id) %>%summarise("total_assists_perminute"=total_assists/total_minutes_played, "total_goals_perminute"=total_goals/total_minutes_played, "total_yellow_cards_percomp"=total_yellow_cards/Nb_Comp,"total_red_cards_percomp"=total_red_card/Nb_Comp, avg_total_goals_percomp=avg_total_goals_percomp, Nb_Comp=Nb_Comp, total_minutes_played=total_minutes_played)
+```
+
+-   From Games subset, we extract the number of games each player played
+
+-   From previous we had total minutes played so now we can now the average time he plays in a single game
+
+```{r}
+app8=subset(app0, select=c(player_id, game_id))
+```
+
+```{r}
+app9= app8 %>%
+distinct(player_id, game_id) %>%
+group_by(player_id) %>%
+summarize("Nb_Game" = n())
+```
+
+```{r}
+app10=subset(app6, select=c(player_id, total_minutes_played))
+app10=merge(app10,app9,"player_id")
+app10=app10 %>% group_by(player_id) %>%summarise("total_minutes_played_pergame"=total_minutes_played/Nb_Game)
+```
+
+```{r FINAL}
+final_app=merge(app10,app7,"player_id")
+```
+
+-   Now we move to another subset "Players", and we only get the ID of attackers
+
+    Since the relevancy of the features apply to specific positions and here we are only considering attack position.
+
+-   We also got the last season the player played in but since the variation is not relevant (2014 - \> 2021) we need to normalize it to see the difference.
+
+-   From players we also need to take: market value, highest market value.
+
+```{r}
+players = read.csv(file = 'data/players.csv')
+
+app11 = players %>% filter(position == 'Attack')
+
+app12 = subset(app11, select = c('player_id', 'last_season','date_of_birth', 'market_value_in_gbp', 'highest_market_value_in_gbp'))
+
+min = min(app12$last_season)
+max = max(app12$last_season)
+
+app12$last_season_normlized = (app12$last_season - min) / (max - min)
+
+app13 = subset(app12, select = -c(last_season))
+
+
+final = final_app %>% inner_join(app13,by="player_id")
+```
+
+## Data cleaning
+
+-   Change date of birth to age
+
+```{r}
+colnames(final)[10] = "age"
+final$age = 2022 - as.numeric(substr(final$age,1,4))
+```
+
+-   Remove NA's
+
+```{r}
+
+ final$age[which(is.na(final$age))] = 0
+
+ final$highest_market_value_in_gbp[which(is.na(final$highest_market_value_in_gbp))] = median(final$highest_market_value_in_gbp, na.rm = TRUE)
+ 
+
+ final$market_value_in_gbp[which(is.na(final$market_value_in_gbp))] = median(final$market_value_in_gbp, na.rm = TRUE)
+ 
+```
+
+-   Drop player id column
+
+```{r}
+ finalx = subset(final, select = -c(player_id) )
+```
+
+-   Since the variation in highest market value and market value is very big as we can see below, we decided to take the log of each.
+
+```{r}
+max(finalx$market_value_in_gbp)
+  
+min(finalx$market_value_in_gbp)
+```
+
+-   Applying the log function to these columns will highlight the differences and the variation will decrease.
+
+-   This improved the accuracy of our model by 10%.
+
+```{r}
+
+ final_test=finalx
+ final_test$market_value_in_gbp =  log(final_test$market_value_in_gbp)
+ final_test$highest_market_value_in_gbp =log(final_test$highest_market_value_in_gbp)
+ 
+ max(final_test$market_value_in_gbp)
+ min(final_test$market_value_in_gbp)
+
+```
+
+## Data visualization
+
+Plotting some data to visualize it before doing correlation.
+
+```{r}
+library(grid)
+library(ggplot2)
+library(data.table)
+library(gridExtra)
+
+p1 <-ggplot(data = final_test) +geom_histogram(mapping = aes(x = age), binwidth = 0.5, col = 'steelblue')
+p2 <-ggplot(data = app12) +geom_histogram(mapping = aes(x = last_season), binwidth = 0.5, col = 'steelblue')
+
+
+p5 <-ggplot(data = final_test) +geom_histogram(mapping = aes(x = total_minutes_played_pergame),binwidth = 0.5, col = 'steelblue')
+
+p6 <-ggplot(data = final_test) +geom_histogram(mapping = aes(x = total_yellow_cards_percomp),binwidth = 0.5, col = 'steelblue')
+
+grid.arrange(p1,p2,p5,p6, ncol= 2)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(app5$total_goals)
+plot(app5$total_assists)
+
+```
+
+## Correlation & Feature Relevancy
+
+```{r}
+library(caret)
+library(corrr)
+# The new dataset is named as onehot
+dmy <- dummyVars(" ~ .", data = final_test)
+onehot <- data.frame(predict(dmy, newdata = final_test))
+
+# Correlation Table
+cor_onehot <- correlate(onehot)
+
+# Extract correlation related to stroke
+cor_onehot%>% focus(market_value_in_gbp)
+
+# Plot the correlation between stroke and all others
+cor_onehot %>%
+  focus(market_value_in_gbp) %>%
+  mutate(rowname = reorder(term, market_value_in_gbp)) %>%
+  ggplot(aes(term, market_value_in_gbp)) +
+  geom_col(color='red') + coord_flip() +
+  theme_bw()
+```
+
+### Correlation Interpretation
+
+Clearly all the features correlate to the target with good values, highest market value is the greatest and total assists per minutes is the lowest. Total minutes played seems to be the second highly correlated feature. Only age that has negative correlation, all others correlate in the positive direction.
+
+## The Model
+
+The generalized linear model (GLM) generalizes linear regression by allowing the linear model to be related to the response variable via a link function and allowing the magnitude of the variance of each measurement to be a function of its predicted value. To predict the market value of the players we will first divide our dataset into test and train, then we will feed the train data to a GLM model.
+
+```{r}
+# Model
+library (MASS)
+
+set.seed(500) #set seed for reproducivity
+n = nrow(final_test)
+
+index = sample((1:n), round(0.8*n))
+train = final_test[index, ]
+test = final_test[-index, ]
+
+
+lm.fit = glm(market_value_in_gbp~.,data = train)
+
+pr.lm = predict(lm.fit, test) #lm.fit is the modal, test is the data
+
+```
+
+## The metrics:
+
+To analysis the performance of the model in predicting the market value of the football players, we will study the following metrics based on the predicted values using the test data. Now that from the results we notice that the model have an acceptable RMSE of 76% considering the diversity of the columns used in our dataset.
+
+### Mean Square Error(MSE)/Root Mean Square Error(RMSE)
+
+![](images/paste-3B6FEB4C.png){width="337"}
+
+### R Square/Adjusted R Square
+
+![](images/paste-CF17AFE5.png){width="353"}
+
+### Mean Absolute Error(MAE)
+
+![](images/paste-2C140962.png){width="348"}
+
+```{r}
+#Metrics
+MSE <- sum((pr.lm - test$market_value_in_gbp) ^ 2) / nrow(test) # Std error
+RMSE = sqrt(MSE)
+print("RMSE: ")
+print(RMSE)
+
+MEA <- sum(abs(pr.lm - test$market_value_in_gbp)) / nrow(test) # Std error
+print("MEA: ")
+print(MEA)
+
+rss <- sum((pr.lm - test$market_value_in_gbp) ^ 2)  # Residual sum of squares
+tss <- sum((test$market_value_in_gbp - mean(test$market_value_in_gbp)) ^ 2) # Total sum of squares
+rsq <- 1 - rss/tss
+
+print("R-Square: ")
+print(rsq)
+```
+
+### Results Analysis
+
+In the two histograms below we can see the log of the initial market value of the players and the predicted one. It can be clearly seen that the values' distribution of both histograms are very close.
+
+```{r}
+hist(test$market_value_in_gbp)
+```
+
+```{r}
+hist(pr.lm)
+```
+
+The two histograms below represent the actual market value and the predicted one. Note that this is without the log function so all of the values are real market values.
+
+From this we can see that the predicted values reflects a close distribution of the original test data.
+
+```{r}
+hist(exp(test$market_value_in_gbp))
+```
+
+```{r}
+hist(exp(pr.lm))
+```
+
+## Conclusion
+
+In conclusion, we were able to build a model that would predict the market value of the players using a generalized linear model. We are now aware of the importance of data engineering and cleaning, which are fundamental steps before using the data. We were also introduced to the metrics and their importance in analyzing the data and the performance of the model.
